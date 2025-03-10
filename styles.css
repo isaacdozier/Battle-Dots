@@ -1,0 +1,308 @@
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+    background: #222;
+    color: white;
+}
+#gameContainer {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+}
+#gameBoard {
+    width: 800px;
+    height: 300px;
+    background-color: #1a2e24;
+    position: relative;
+    border: 2px solid #555;
+    overflow: hidden;
+    margin-bottom: 20px;
+}
+.tile {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-sizing: border-box;
+    cursor: pointer;
+}
+.unexplored {
+    background-color: #111;
+}
+.player-territory {
+    background-color: rgba(0, 100, 0, 0.2);
+}
+.neutral-territory {
+    background-color: rgba(70, 70, 70, 0.2);
+}
+.enemy-territory {
+    background-color: rgba(100, 0, 0, 0.2);
+}
+.base {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+.player-base {
+    background-color: #4CAF50;
+    box-shadow: 0 0 10px #4CAF50;
+    overflow: visible;
+}
+.enemy-base {
+    background-color: #E74C3C;
+    box-shadow: 0 0 10px #E74C3C;
+    overflow: visible;
+}
+.cannon {
+    position: absolute;
+    width: 20px;
+    height: 8px;
+    background-color: #333;
+    top: 50%;
+    transform-origin: left center;
+    z-index: 5;
+}
+.cannon-ready {
+    box-shadow: 0 0 5px #ffcc00;
+}
+.cannon-reload {
+    position: absolute;
+    width: 100%;
+    height: 3px;
+    background-color: #333;
+    bottom: -10px;
+    left: 0;
+    overflow: hidden;
+}
+.cannon-reload-fill {
+    height: 100%;
+    background-color: #ffcc00;
+    width: 0%;
+    transition: width 0.5s linear;
+}
+.cannon-projectile {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background-color: #ffcc00;
+    border-radius: 50%;
+    z-index: 20;
+    box-shadow: 0 0 10px #ffcc00;
+}
+.cannon-explosion {
+    position: absolute;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,204,0,1) 0%, rgba(255,102,0,1) 50%, rgba(221,51,51,0.7) 100%);
+    z-index: 20;
+    transform: translate(-50%, -50%);
+    opacity: 1;
+    animation: explosion 0.8s forwards;
+}
+@keyframes explosion {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
+}
+.building {
+    position: absolute;
+    width: 30px;
+    height: 30px;
+    transform: translate(-50%, -50%);
+}
+.barracks {
+    background-color: #4C70AF;
+}
+.archery {
+    background-color: #AF4C4C;
+}
+.factory {
+    background-color: #AF914C;
+}
+.unit {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    transition: left 0.5s, top 0.5s;
+}
+.infantry {
+    width: 15px;
+    height: 15px;
+    background-color: #4C70AF;
+}
+.sniper {
+    width: 12px;
+    height: 12px;
+    background-color: #AF4C4C;
+}
+.tank {
+    width: 20px;
+    height: 20px;
+    background-color: #AF914C;
+}
+.reload-indicator {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #FF5722;
+    border-radius: 50%;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0.7;
+    animation: pulse 1s infinite;
+    display: none;
+}
+@keyframes pulse {
+    0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.7; }
+    50% { transform: translate(-50%, -50%) scale(1.1); opacity: 0.5; }
+    100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.7; }
+}
+.health-bar {
+    position: absolute;
+    height: 3px;
+    background-color: #333;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+}
+.health-fill {
+    height: 100%;
+    background-color: #4CAF50;
+    transition: width 0.3s;
+}
+.battle-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(255,255,255,0.3);
+    z-index: 1;
+}
+.controls {
+    display: flex;
+    width: 100%;
+    max-width: 800px;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+.build-buttons {
+    display: flex;
+    gap: 10px;
+}
+button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+}
+#buildBarracks {
+    background-color: #4C70AF;
+}
+#buildArchery {
+    background-color: #AF4C4C;
+}
+#buildFactory {
+    background-color: #AF914C;
+}
+#gameInfo {
+    width: 800px;
+    background-color: #333;
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 15px;
+}
+#gameOver {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    padding: 30px;
+    border-radius: 10px;
+    text-align: center;
+    display: none;
+    z-index: 100;
+}
+#restartButton {
+    margin-top: 20px;
+    background-color: #4CAF50;
+}
+.info-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    width: 800px;
+}
+.special-effect {
+    position: absolute;
+    pointer-events: none;
+    z-index: 15;
+}
+.arrow {
+    width: 10px;
+    height: 2px;
+    background-color: #ffcc00;
+    position: absolute;
+    transform-origin: left center;
+}
+.splash {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background-color: rgba(255, 140, 0, 0.5);
+    position: absolute;
+    transform: translate(-50%, -50%);
+    animation: splash 0.5s forwards;
+}
+.shield {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #4a90e2;
+    border-radius: 50%;
+    box-sizing: border-box;
+    animation: shield-pulse 1s infinite;
+}
+@keyframes splash {
+    0% { transform: translate(-50%, -50%) scale(0.2); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+}
+@keyframes shield-pulse {
+    0% { box-shadow: 0 0 0 0px rgba(74, 144, 226, 0.4); }
+    100% { box-shadow: 0 0 0 10px rgba(74, 144, 226, 0); }
+}
+.selected-tile {
+    box-shadow: inset 0 0 0 3px #ffcc00;
+}
+.unit-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+.ability-tooltip {
+    background: rgba(0,0,0,0.8);
+    border-radius: 4px;
+    padding: 5px 8px;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+button:hover .ability-tooltip {
+    opacity: 1;
+}

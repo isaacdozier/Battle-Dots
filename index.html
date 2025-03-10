@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple RTS Game</title>
+
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="gameContainer">
+        <div class="info-panel">
+            <div>Gold: <span id="goldDisplay">200</span></div>
+            <div>Player Base: <span id="playerBaseHealth">500</span> / 500</div>
+            <div>Enemy Base: <span id="enemyBaseHealth">500</span> / 500</div>
+        </div>
+        
+        <div id="gameBoard">
+            <!-- Game elements will be rendered here by JavaScript -->
+            <div id="gameOver">
+                <h2 id="gameOverMessage"></h2>
+                <button id="restartButton">Restart Game</button>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="build-buttons">
+                <button id="buildBarracks">
+                    <div class="unit-icon infantry"></div>
+                    Infantry (25g)
+                    <div class="ability-tooltip">Basic ranged unit with balanced stats</div>
+                </button>
+                <button id="buildArchery">
+                    <div class="unit-icon sniper"></div>
+                    Sniper (100g)
+                    <div class="ability-tooltip">Very fragile (20 HP) but extreme range (8 tiles) with high damage</div>
+                </button>
+                <button id="buildFactory">
+                    <div class="unit-icon tank"></div>
+                    Tank (200g)
+                    <div class="ability-tooltip">Very sturdy (180 HP), slow-moving heavy unit with area damage</div>
+                </button>
+            </div>
+        </div>
+        
+        <div id="gameInfo">
+            <p><strong>How to play:</strong> Click on a tile in your territory to build a structure. Each structure produces different units:</p>
+            <p>
+                <span class="unit-icon infantry"></span> <strong>Infantry:</strong> Basic ranged unit with balanced stats<br>
+                <span class="unit-icon sniper"></span> <strong>Sniper:</strong> Very fragile (20 HP) but extreme range (8 tiles) with high damage<br>
+                <span class="unit-icon tank"></span> <strong>Tank:</strong> Very sturdy (180 HP), slow-moving unit with area damage to nearby enemies
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Game constants
+        const GRID_WIDTH = 20;
+        const GRID_HEIGHT = 7;
+        const TILE_SIZE = 40;
+        const BATTLE_LINE = Math.floor(GRID_WIDTH / 2);
+        const UPDATE_INTERVAL = 100; // ms - for smoother game loop
+        
+        // Building costs
+        const BUILDING_COSTS = {
+            barracks: 25,
+            archery: 100,
+            factory: 500
+        };
+
+        // Building stats
+        const BUILDING_STATS = {
+            barracks: {
+                canAttack: true,
+                damage: 15,
+                attackSpeed: 1.5, // attacks per second
+                range: 5,
+                projectileColor: '#4C70AF'
+            },
+            archery: {
+                canAttack: false
+            },
+            factory: {
+                canAttack: false
+            }
+        };
+
+        // Unit stats
+        const UNIT_STATS = {
+            infantry: { 
+                health: 50, 
+                damage: 5, 
+                attackSpeed: 1.5, // attacks per second
+                moveSpeed: 180,
+                range: 3,
+                description: "Basic ranged unit with balanced stats"
+            },
+            sniper: { 
+                health: 25, // very little health
+                damage: 30, 
+                attackSpeed: 0.25,
+                moveSpeed: 150,
+                range: 8, // extremely long range
+                reloadTime: 3, // seconds between shots
+                description: "Extreme range sniper with high damage but very slow firing"
+            },
+            tank: { 
+                health: 250, // lots of health
+                damage: 50, 
+                attackSpeed: 0.5, // attacks every 2 seconds
+                moveSpeed: 60, // much slower movement
+                range: 6,
+                aoeRadius: 1.5, // Area of effect radius
+                aoeDamage: 25, // Damage to nearby units
+                reloadTime: 5, // seconds between shots
+                description: "Slow moving heavy unit with area damage"
+            }
+        };
+        
+        // Track animation and interval IDs
+        let animationFrameId = null;
+        let enemyAIInterval = null;
+        let playerGoldInterval = null;
+        let enemyGoldInterval = null;
+        
+        // Game state
+        let gameBoard;
+        let gameOver = false;
+        let playerGold = 75; // Starting gold increased
+        let enemyGold = 75; // Same starting gold as player
+        let exploredTiles = {};
+        let selectedTile = null;
+        let lastUpdate = 0;
+        let globalSpawnTimer = 0;
+        const GLOBAL_SPAWN_INTERVAL = 15; // seconds
+        
+        // Game entities
+        let playerBase = {
+            gridX: 1,
+            gridY: Math.floor(GRID_HEIGHT / 2),
+            health: 500,
+            maxHealth: 500,
+            cannon: {
+                cooldown: 0,
+                maxCooldown: 8, // seconds
+                range: 8,
+                damage: 100,
+                areaOfEffect: 1,
+                ready: true
+            }
+        };
+        
+        let enemyBase = {
+            gridX: GRID_WIDTH - 2,
+            gridY: Math.floor(GRID_HEIGHT / 2),
+            health: 500,
+            maxHealth: 500,
+            cannon: {
+                cooldown: 0,
+                maxCooldown: 8, // seconds
+                range: 8,
+                damage: 100,
+                areaOfEffect: 1,
+                ready: true
+            }
+        };
+        
+        let playerBuildings = [];
+        let enemyBuildings = [];
+        let playerUnits = [];
+        let enemyUnits = [];
+        let effects = [];
+        
+        // Initialize game
+        function initGame() {
+            gameBoard = document.getElementById('gameBoard');
+            
+            // Create tiles
+            createTiles();
+            
+            // Create bases
+            createBase(playerBase, 'player-base');
+            createBase(enemyBase, 'enemy-base');
+            
+            // Add battle line
+            const battleLine = document.createElement('div');
+            battleLine.className = 'battle-line';
+            battleLine.style.left = (BATTLE_LINE * TILE_SIZE) + 'px';
+            gameBoard.appendChild(battleLine);
+            
+            // Add event listeners
+            document.getElementById('buildBarracks').addEventListener('click', () => selectBuildingType('barracks'));
+            document.getElementById('buildArchery').addEventListener('click', () => selectBuildingType('archery'));
+            document.getElementById('buildFactory').addEventListener('click', () => selectBuildingType('factory'));
+            
+            // Mark player's starting area as explored
+            for (let x = 0; x <= playerBase.gridX + 3; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    exploredTiles[`${x},${y}`] = true;
+                }
+            }
+            
+            // Start game loops
+            animationFrameId = requestAnimationFrame(gameLoop);
+            
+            // Start enemy AI
+            enemyAIInterval = setInterval(updateEnemyAI, 3000);
+            
+            // Gold generation for player
+            playerGoldInterval = setInterval(() => {
+                if (!gameOver) {
+                    playerGold += 2;
+                    updateUI();
+                }
+            }, 1000);
+            
+            // Gold generation for enemy - at the same rate as player
+            enemyGoldInterval = setInterval(() => {
+                if (!gameOver) {
+                    enemyGold += 2;
+                }
+            }, 1000);
+            
+            // Update UI
+            updateUI();
+        }
+        
+        function gameLoop(timestamp) {
+            if (!lastUpdate) lastUpdate = timestamp;
+            
+            const deltaTime = timestamp - lastUpdate;
+            
+            if (deltaTime >= UPDATE_INTERVAL) {
+                updateGame(deltaTime);
+                lastUpdate = timestamp;
+            }
+            
+            if (!gameOver) {
+                animationFrameId = requestAnimationFrame(gameLoop);
+            }
+        }
+        
+        function updateGame(deltaTime) {
+            // Don't update anything if game is over
+            if (gameOver) return;
+            
+            const deltaSeconds = deltaTime / 1000; // Convert to seconds
+            
+            // Update global spawn timer
+            globalSpawnTimer += deltaSeconds;
+            if (globalSpawnTimer >= GLOBAL_SPAWN_INTERVAL) {
+                globalSpawnTimer = 0;
+                spawnUnitsFromAllBuildings();
+            }
+            
+            updateBuildings(deltaSeconds);
+            updateUnits(deltaSeconds);
+            updateBaseCannons(deltaSeconds);
+            updateEffects();
+            updateExploredTiles();
+            updateUI();
+        }
+        
+        function createTiles() {
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    const tile = document.createElement('div');
+                    tile.className = 'tile unexplored';
+                    tile.id = `tile-${x}-${y}`;
+                    tile.style.left = (x * TILE_SIZE) + 'px';
+                    tile.style.top = (y * TILE_SIZE) + 'px';
+                    tile.dataset.x = x;
+                    tile.dataset.y = y;
+                    
+                    // Add click event for building placement
+                    tile.addEventListener('click', () => handleTileClick(x, y));
+                    
+                    gameBoard.appendChild(tile);
+                }
+            }
+        }
+        
+        function handleTileClick(x, y) {
+            // Only allow building in player territory and within first half
+            if (x < BATTLE_LINE && isValidBuildTile(x, y)) {
+                selectTile(x, y);
+            }
+        }
+        
+        function selectTile(x, y) {
+            // Clear previous selection
+            if (selectedTile) {
+                const oldTile = document.getElementById(`tile-${selectedTile.x}-${selectedTile.y}`);
+                if (oldTile) oldTile.classList.remove('selected-tile');
+            }
+            
+            selectedTile = { x, y };
+            const tile = document.getElementById(`tile-${x}-${y}`);
+            tile.classList.add('selected-tile');
+        }
+        
+        function selectBuildingType(type) {
+            const cost = BUILDING_COSTS[type];
+            
+            if (selectedTile && playerGold >= cost && isValidBuildTile(selectedTile.x, selectedTile.y)) {
+                playerGold -= cost;
+                buildStructure(type, selectedTile.x, selectedTile.y);
+                
+                // Clear selection
+                const tile = document.getElementById(`tile-${selectedTile.x}-${selectedTile.y}`);
+                tile.classList.remove('selected-tile');
+                selectedTile = null;
+            }
+        }
+        
+        function createBase(base, className) {
+            const baseElement = document.createElement('div');
+            baseElement.className = `base ${className}`;
+            baseElement.style.left = ((base.gridX + 0.5) * TILE_SIZE) + 'px';
+            baseElement.style.top = ((base.gridY + 0.5) * TILE_SIZE) + 'px';
+            
+            // Add cannon
+            const cannon = document.createElement('div');
+            cannon.className = 'cannon';
+            cannon.style.left = '50%';
+            
+            // Cannon faces right for player, left for enemy
+            if (className === 'player-base') {
+                cannon.style.transform = 'translateY(-50%) rotate(0deg)';
+            } else {
+                cannon.style.transform = 'translateY(-50%) rotate(180deg)';
+            }
+            
+            // Add cannon reload indicator
+            const cannonReload = document.createElement('div');
+            cannonReload.className = 'cannon-reload';
+            
+            const cannonReloadFill = document.createElement('div');
+            cannonReloadFill.className = 'cannon-reload-fill';
+            
+            cannonReload.appendChild(cannonReloadFill);
+            cannon.appendChild(cannonReload);
+            baseElement.appendChild(cannon);
+            
+            // Add health bar
+            const healthBar = document.createElement('div');
+            healthBar.className = 'health-bar';
+            healthBar.style.width = TILE_SIZE + 'px';
+            
+            const healthFill = document.createElement('div');
+            healthFill.className = 'health-fill';
+            healthFill.style.width = '100%';
+            
+            healthBar.appendChild(healthFill);
+            baseElement.appendChild(healthBar);
+            
+            if (className === 'player-base') {
+                baseElement.id = 'playerBaseElement';
+                cannon.id = 'playerCannon';
+            } else {
+                baseElement.id = 'enemyBaseElement';
+                cannon.id = 'enemyCannon';
+                baseElement.style.visibility = 'hidden';
+            }
+            
+            gameBoard.appendChild(baseElement);
+        }
+        
+        function buildStructure(type, gridX, gridY) {
+            const building = {
+                gridX: gridX,
+                gridY: gridY,
+                type: type,
+                health: 150,
+                maxHealth: 150,
+                element: null,
+                attackTimer: 0,
+                target: null
+            };
+            
+            // Add attack properties based on building type
+            const stats = BUILDING_STATS[type];
+            if (stats && stats.canAttack) {
+                building.canAttack = true;
+                building.damage = stats.damage;
+                building.attackSpeed = stats.attackSpeed;
+                building.range = stats.range;
+                building.projectileColor = stats.projectileColor;
+            }
+            
+            // Create building element
+            const buildingElement = document.createElement('div');
+            buildingElement.className = `building ${type}`;
+            buildingElement.style.left = ((building.gridX + 0.5) * TILE_SIZE) + 'px';
+            buildingElement.style.top = ((building.gridY + 0.5) * TILE_SIZE) + 'px';
+            
+            // Add cooldown indicator
+            const cooldownIndicator = document.createElement('div');
+            cooldownIndicator.className = 'cooldown';
+            cooldownIndicator.style.width = '4px';
+            cooldownIndicator.style.height = '20px';
+            cooldownIndicator.style.backgroundColor = 'white';
+            cooldownIndicator.style.position = 'absolute';
+            cooldownIndicator.style.left = '50%';
+            cooldownIndicator.style.top = '50%';
+            cooldownIndicator.style.transform = 'translate(-50%, -50%)';
+            
+            // Add health bar
+            const healthBar = document.createElement('div');
+            healthBar.className = 'health-bar';
+            healthBar.style.width = '30px';
+            
+            const healthFill = document.createElement('div');
+            healthFill.className = 'health-fill';
+            healthFill.style.width = '100%';
+            
+            healthBar.appendChild(healthFill);
+            buildingElement.appendChild(healthBar);
+            buildingElement.appendChild(cooldownIndicator);
+            gameBoard.appendChild(buildingElement);
+            
+            building.element = buildingElement;
+            playerBuildings.push(building);
+            
+            updateUI();
+        }
+        
+        function isValidBuildTile(gridX, gridY) {
+            // Check if already a building there
+            for (let building of playerBuildings) {
+                if (building.gridX === gridX && building.gridY === gridY) {
+                    return false;
+                }
+            }
+            
+            // Check if not too close to player base
+            if (Math.abs(gridX - playerBase.gridX) <= 0 && 
+                Math.abs(gridY - playerBase.gridY) <= 0) {
+                return false;
+            }
+            
+            // Make sure it's in player territory
+            if (gridX >= BATTLE_LINE) {
+                return false;
+            }
+            
+            return true;
+        }
+        
+        function isEnemyUnderPressure() {
+            // Check if player has significantly more units than the enemy
+            const playerUnitCount = playerUnits.length;
+            const enemyUnitCount = enemyUnits.length;
+            
+            // Calculate how many player units are in enemy territory
+            const unitsInEnemyTerritory = playerUnits.filter(unit => unit.gridX > BATTLE_LINE).length;
+            
+            // Enemy is under pressure if player has more units AND some are in enemy territory
+            const underPressure = (playerUnitCount > enemyUnitCount + 3) && (unitsInEnemyTerritory > 2);
+            
+            // Give the enemy a small gold bonus when under pressure to help recovery
+            if (underPressure && !gameOver) {
+                enemyGold += 1; // Small bonus each time this function is called
+            }
+            
+            return underPressure;
+        }
+        
+        function spawnUnitsFromAllBuildings() {
+            // Spawn units from all player buildings
+            for (let building of playerBuildings) {
+                spawnUnit(building, true);
+            }
+            
+            // Spawn units from all enemy buildings
+            for (let building of enemyBuildings) {
+                spawnUnit(building, false);
+                
+                // If enemy is under pressure, give a chance for emergency extra unit spawn
+                if (isEnemyUnderPressure() && Math.random() < 0.7) { // 70% chance 
+                    // Wait a short delay to create the impression of reinforcements
+                    setTimeout(() => {
+                        if (!gameOver && building.element && gameBoard.contains(building.element)) {
+                            spawnUnit(building, false);
+                        }
+                    }, 500);
+                }
+            }
+        }
+        
+        function updateBuildings(deltaTime) {
+            // If game is over, don't update
+            if (gameOver) return;
+            
+            // Update spawn progress indicators
+            const progress = (globalSpawnTimer / GLOBAL_SPAWN_INTERVAL) * 100;
+            
+            // Update player buildings
+            for (let building of playerBuildings) {
+                // Update cooldown indicator
+                const cooldownIndicator = building.element.querySelector('.cooldown');
+                if (cooldownIndicator) {
+                    const rotation = progress * 3.6; // Convert percentage to degrees (100% = 360 degrees)
+                    cooldownIndicator.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+                }
+                
+                // Handle attacking for buildings that can attack
+                if (building.canAttack) {
+                    updateBuildingAttack(building, enemyUnits, deltaTime);
+                }
+            }
+            
+            // Update enemy buildings
+            for (let building of enemyBuildings) {
+                if (building.element) {
+                    const cooldownIndicator = building.element.querySelector('.cooldown');
+                    if (cooldownIndicator) {
+                        const rotation = progress * 3.6;
+                        cooldownIndicator.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+                    }
+                    
+                    // Handle attacking for buildings that can attack
+                    if (building.canAttack) {
+                        updateBuildingAttack(building, playerUnits, deltaTime);
+                    }
+                }
+            }
+        }
+        
+        function updateBuildingAttack(building, targetUnits, deltaTime) {
+            // If building has no target or target is dead/out of range, find new target
+            if (!building.target || 
+                targetUnits.indexOf(building.target) === -1 || 
+                distance(building.gridX, building.gridY, building.target.gridX, building.target.gridY) > building.range) {
+                
+                building.target = null;
+                
+                // Find closest target in range
+                let closestDist = Infinity;
+                let closestTarget = null;
+                
+                for (let unit of targetUnits) {
+                    const dist = distance(building.gridX, building.gridY, unit.gridX, unit.gridY);
+                    if (dist <= building.range && dist < closestDist) {
+                        closestDist = dist;
+                        closestTarget = unit;
+                    }
+                }
+                
+                building.target = closestTarget;
+            }
+            
+            // If we have a target, attack it
+            if (building.target) {
+                building.attackTimer += deltaTime;
+                const attackInterval = 1 / building.attackSpeed;
+                
+                if (building.attackTimer >= attackInterval) {
+                    building.attackTimer = 0;
+                    fireBuildingProjectile(building, building.target);
+                }
+            }
+        }
+        
+        function fireBuildingProjectile(building, target) {
+            // If game is over or target no longer exists, don't fire
+            if (gameOver || !target || !target.element || !gameBoard.contains(target.element)) {
+                return;
+            }
+            
+            // Calculate positions
+            const startX = (building.gridX + 0.5) * TILE_SIZE;
+            const startY = (building.gridY + 0.5) * TILE_SIZE;
+            const targetX = (target.gridX + 0.5) * TILE_SIZE;
+            const targetY = (target.gridY + 0.5) * TILE_SIZE;
+            
+            // Create projectile
+            const projectile = document.createElement('div');
+            projectile.className = 'special-effect';
+            projectile.style.position = 'absolute';
+            projectile.style.width = '8px';
+            projectile.style.height = '8px';
+            projectile.style.borderRadius = '50%';
+            projectile.style.backgroundColor = building.projectileColor || '#4C70AF';
+            projectile.style.left = startX + 'px';
+            projectile.style.top = startY + 'px';
+            projectile.style.zIndex = '10';
+            projectile.style.transform = 'translate(-50%, -50%)';
+            gameBoard.appendChild(projectile);
+            
+            // Animate projectile
+            const duration = 400; // ms
+            const startTime = Date.now();
+            
+            function animateProjectile() {
+                if (gameOver) {
+                    if (gameBoard.contains(projectile)) {
+                        gameBoard.removeChild(projectile);
+                    }
+                    return;
+                }
+                
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                
+                const currentX = startX + (targetX - startX) * progress;
+                const currentY = startY + (targetY - startY) * progress;
+                
+                projectile.style.left = currentX + 'px';
+                projectile.style.top = currentY + 'px';
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animateProjectile);
+                } else {
+                    // Projectile hit target
+                    if (gameBoard.contains(projectile)) {
+                        gameBoard.removeChild(projectile);
+                    }
+                    
+                    // Create hit effect
+                    createHitEffect(target.gridX, target.gridY);
+                    
+                    // Deal damage
+                    if (!gameOver && target && target.element && gameBoard.contains(target.element)) {
+                        target.health -= building.damage;
+                        
+                        // Update health bar
+                        const healthFill = target.element.querySelector('.health-fill');
+                        const healthPercent = Math.max(0, target.health / target.maxHealth * 100);
+                        healthFill.style.width = healthPercent + '%';
+                        
+                        // Check if target died
+                        if (target.health <= 0) {
+                            gameBoard.removeChild(target.element);
+                            
+                            // Correctly identify which array to remove from
+                            const targetArray = target.isPlayer ? playerUnits : enemyUnits;
+                            const targetIndex = targetArray.indexOf(target);
+                            
+                            if (targetIndex !== -1) {
+                                targetArray.splice(targetIndex, 1);
+                            }
+                            
+                            building.target = null;
+                        }
+                    }
+                }
+            }
+            
+            requestAnimationFrame(animateProjectile);
+        }
+        
+        function spawnUnit(building, isPlayer) {
+            let unitType;
+            
+            // Determine unit type based on building type
+            switch(building.type) {
+                case 'barracks':
+                    unitType = 'infantry';
+                    break;
+                case 'archery':
+                    unitType = 'sniper';
+                    break;
+                case 'factory':
+                    unitType = 'tank';
+                    break;
+            }
+            
+            const stats = UNIT_STATS[unitType];
+            
+            const unit = {
+                gridX: building.gridX + (isPlayer ? 1 : -1),
+                gridY: building.gridY,
+                type: unitType,
+                health: stats.health,
+                maxHealth: stats.health,
+                damage: stats.damage,
+                attackSpeed: stats.attackSpeed,
+                attackTimer: 0,
+                range: stats.range || 3,
+                reloadTime: stats.reloadTime || 0,
+                currentReload: 0,
+                aoeRadius: stats.aoeRadius || 0,
+                aoeDamage: stats.aoeDamage || 0,
+                isPlayer: isPlayer,
+                target: null,
+                moveTimer: 0,
+                moveSpeed: stats.moveSpeed,
+                element: null,
+                moving: false,
+                attacking: false,
+                reloading: false
+            };
+            
+            // Create unit element
+            const unitElement = document.createElement('div');
+            unitElement.className = `unit ${unitType}`;
+            unitElement.style.left = ((unit.gridX + 0.5) * TILE_SIZE) + 'px';
+            unitElement.style.top = ((unit.gridY + 0.5) * TILE_SIZE) + 'px';
+            
+            // Add reload indicator for tanks
+            if (unitType === 'tank') {
+                const reloadIndicator = document.createElement('div');
+                reloadIndicator.className = 'reload-indicator';
+                unitElement.appendChild(reloadIndicator);
+            }
+            
+            // Add health bar
+            const healthBar = document.createElement('div');
+            healthBar.className = 'health-bar';
+            healthBar.style.width = '20px';
+            
+            const healthFill = document.createElement('div');
+            healthFill.className = 'health-fill';
+            healthFill.style.width = '100%';
+            
+            healthBar.appendChild(healthFill);
+            unitElement.appendChild(healthBar);
+            
+            // If enemy unit and not in visible range, hide it
+            if (!isPlayer && !isTileExplored(unit.gridX, unit.gridY)) {
+                unitElement.style.visibility = 'hidden';
+            }
+            
+            gameBoard.appendChild(unitElement);
+            unit.element = unitElement;
+            
+            if (isPlayer) {
+                playerUnits.push(unit);
+            } else {
+                enemyUnits.push(unit);
+            }
+        }
+        
+        function updateUnits(deltaTime) {
+            // Process player units
+            updateUnitGroup(playerUnits, enemyUnits, enemyBuildings, enemyBase, deltaTime);
+            
+            // Process enemy units
+            updateUnitGroup(enemyUnits, playerUnits, playerBuildings, playerBase, deltaTime);
+        }
+        
+        function updateUnitGroup(units, enemyUnits, enemyBuildings, enemyBase, deltaTime) {
+            // If game is over, don't update
+            if (gameOver) return;
+            
+            for (let i = units.length - 1; i >= 0; i--) {
+                const unit = units[i];
+                
+                // Skip if unit no longer exists
+                if (!unit || !unit.element || !gameBoard.contains(unit.element)) {
+                    if (i < units.length) {
+                        units.splice(i, 1);
+                    }
+                    continue;
+                }
+                
+                // Update visibility
+                if (!isTileExplored(unit.gridX, unit.gridY)) {
+                    unit.element.style.visibility = 'hidden';
+                } else {
+                    unit.element.style.visibility = 'visible';
+                }
+                
+                // Reload time for special units
+                if ((unit.type === 'sniper' || unit.type === 'tank') && unit.currentReload > 0) {
+                    unit.currentReload -= deltaTime;
+                    
+                    // Update tank reload animation
+                    if (unit.type === 'tank') {
+                        const reloadIndicator = unit.element.querySelector('.reload-indicator');
+                        if (reloadIndicator) {
+                            reloadIndicator.style.display = 'block';
+                        }
+                    }
+                    
+                    if (unit.currentReload <= 0) {
+                        // Hide reload indicator when reload is complete
+                        if (unit.type === 'tank') {
+                            const reloadIndicator = unit.element.querySelector('.reload-indicator');
+                            if (reloadIndicator) {
+                                reloadIndicator.style.display = 'none';
+                            }
+                        }
+                    }
+                }
+                
+                // Check if unit should attack or move
+                if (!unit.target) {
+                    // Look for targets in range (enemy units first)
+                    let foundTarget = false;
+                    
+                    // Check for enemy units in attack range
+                    for (let enemyUnit of enemyUnits) {
+                        const dist = distance(unit.gridX, unit.gridY, enemyUnit.gridX, enemyUnit.gridY);
+                        if (dist <= unit.range) {
+                            unit.target = enemyUnit;
+                            unit.targetType = 'unit';
+                            foundTarget = true;
+                            break;
+                        }
+                    }
+                    
+                    // If no unit targets, check for enemy buildings
+                    if (!foundTarget) {
+                        for (let building of enemyBuildings) {
+                            const dist = distance(unit.gridX, unit.gridY, building.gridX, building.gridY);
+                            if (dist <= unit.range) {
+                                unit.target = building;
+                                unit.targetType = 'building';
+                                foundTarget = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If no building targets, check for enemy base
+                    if (!foundTarget) {
+                        const dist = distance(unit.gridX, unit.gridY, enemyBase.gridX, enemyBase.gridY);
+                        if (dist <= unit.range) {
+                            unit.target = enemyBase;
+                            unit.targetType = 'base';
+                            foundTarget = true;
+                        }
+                    }
+                    
+                    // If no target found and not moving, check if we can move
+                    if (!foundTarget && !unit.moving) {
+                        unit.moveTimer += deltaTime * 1000;
+                        
+                        // Different movement speed based on unit type
+                        if (unit.moveTimer >= unit.moveSpeed) {
+                            unit.moveTimer = 0;
+                            unit.moving = true;
+                            
+                            // Move forward (direction based on player/enemy)
+                            const direction = unit.isPlayer ? 1 : -1;
+                            const newX = unit.gridX + direction;
+                            unit.gridX = newX;
+                            
+                            // Animate movement - slower for tanks
+                            const moveDuration = unit.type === 'tank' ? 1000 : 600;
+                            unit.element.style.left = ((unit.gridX + 0.5) * TILE_SIZE) + 'px';
+                            
+                            // After transition ends, allow movement again
+                            setTimeout(() => {
+                                unit.moving = false;
+                            }, moveDuration);
+                        }
+                    }
+                } else {
+                    // Attack target
+                    let targetObject = unit.target;
+                    let targetExists = true;
+                    let targetInRange = true;
+                    
+                    // Check if target still exists and is in range
+                    if (unit.targetType === 'unit') {
+                        targetExists = enemyUnits.indexOf(targetObject) !== -1;
+                        if (targetExists) {
+                            targetInRange = distance(unit.gridX, unit.gridY, targetObject.gridX, targetObject.gridY) <= unit.range;
+                        }
+                    } else if (unit.targetType === 'building') {
+                        targetExists = enemyBuildings.indexOf(targetObject) !== -1;
+                        if (targetExists) {
+                            targetInRange = distance(unit.gridX, unit.gridY, targetObject.gridX, targetObject.gridY) <= unit.range;
+                        }
+                    } else if (unit.targetType === 'base') {
+                        targetInRange = distance(unit.gridX, unit.gridY, targetObject.gridX, targetObject.gridY) <= unit.range;
+                    }
+                    
+                    if (!targetExists || !targetInRange) {
+                        unit.target = null;
+                        unit.targetType = null;
+                        continue;
+                    }
+                    
+                    // Attack logic
+                    unit.attackTimer += deltaTime;
+                    const attackInterval = 1 / unit.attackSpeed;
+                    
+                    if (unit.attackTimer >= attackInterval) {
+                        unit.attackTimer = 0;
+                        
+                        // Check reload time for sniper and tank
+                        if ((unit.type === 'sniper' || unit.type === 'tank') && unit.currentReload > 0) {
+                            continue; // Skip attack if still reloading
+                        }
+                        
+                        // Create attack effect
+                        createRangedAttackEffect(unit, targetObject);
+                        
+                        // Apply reload time for special units
+                        if (unit.type === 'sniper') {
+                            unit.currentReload = unit.reloadTime; // Start sniper reload
+                        } else if (unit.type === 'tank') {
+                            unit.currentReload = unit.reloadTime; // Start tank reload
+                            // Show reload indicator
+                            const reloadIndicator = unit.element.querySelector('.reload-indicator');
+                            if (reloadIndicator) {
+                                reloadIndicator.style.display = 'block';
+                            }
+                        }
+                        
+                        // Deal damage based on target type
+                        if (unit.targetType === 'unit') {
+                            targetObject.health -= unit.damage;
+                            createHitEffect(targetObject.gridX, targetObject.gridY);
+                            
+                            // Handle AOE damage for tanks
+                            if (unit.type === 'tank' && unit.aoeRadius > 0) {
+                                createSplashEffect(targetObject.gridX, targetObject.gridY);
+                                
+                                // Deal splash damage to nearby enemy units
+                                for (let nearbyUnit of enemyUnits) {
+                                    if (nearbyUnit !== targetObject && 
+                                        distance(targetObject.gridX, targetObject.gridY, nearbyUnit.gridX, nearbyUnit.gridY) <= unit.aoeRadius) {
+                                        nearbyUnit.health -= unit.aoeDamage;
+                                        
+                                        // Update health bar
+                                        const healthFill = nearbyUnit.element.querySelector('.health-fill');
+                                        const healthPercent = Math.max(0, nearbyUnit.health / nearbyUnit.maxHealth * 100);
+                                        healthFill.style.width = healthPercent + '%';
+                                        
+                                        // Check if unit died from splash
+                                        if (nearbyUnit.health <= 0) {
+                                            gameBoard.removeChild(nearbyUnit.element);
+                                            enemyUnits.splice(enemyUnits.indexOf(nearbyUnit), 1);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Update health bar
+                            const healthFill = targetObject.element.querySelector('.health-fill');
+                            const healthPercent = Math.max(0, targetObject.health / targetObject.maxHealth * 100);
+                            healthFill.style.width = healthPercent + '%';
+                            
+                            // Check if target died
+                            if (targetObject.health <= 0) {
+                                gameBoard.removeChild(targetObject.element);
+                                enemyUnits.splice(enemyUnits.indexOf(targetObject), 1);
+                                unit.target = null;
+                                unit.targetType = null;
+                            }
+                        } else if (unit.targetType === 'building') {
+                            targetObject.health -= unit.damage;
+                            createHitEffect(targetObject.gridX, targetObject.gridY);
+                            
+                            // Update health bar
+                            const healthFill = targetObject.element.querySelector('.health-fill');
+                            const healthPercent = Math.max(0, targetObject.health / targetObject.maxHealth * 100);
+                            //healthFill.style.width = healthPercent + '%';
+                            
+                            // Check if building is destroyed
+                            if (targetObject.health <= 0) {
+                                gameBoard.removeChild(targetObject.element);
+                                enemyBuildings.splice(enemyBuildings.indexOf(targetObject), 1);
+                                unit.target = null;
+                                unit.targetType = null;
+                            }
+                        } else if (unit.targetType === 'base') {
+                            // Attack enemy base
+                            targetObject.health -= unit.damage;
+                            createHitEffect(targetObject.gridX, targetObject.gridY);
+                            updateUI();
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Special effects
+        function createRangedAttackEffect(attacker, target) {
+            // If game is over, don't create more effects
+            if (gameOver) return;
+            
+            // Check if elements still exist
+            if (!attacker || !target) return;
+            
+            const startX = (attacker.gridX + 0.5) * TILE_SIZE;
+            const startY = (attacker.gridY + 0.5) * TILE_SIZE;
+            const endX = (target.gridX + 0.5) * TILE_SIZE;
+            const endY = (target.gridY + 0.5) * TILE_SIZE;
+            
+            const arrow = document.createElement('div');
+            arrow.className = 'arrow special-effect';
+            arrow.style.left = startX + 'px';
+            arrow.style.top = startY + 'px';
+            
+            // Different projectile colors based on unit type
+            if (attacker.type === 'infantry') {
+                arrow.style.backgroundColor = '#4C70AF';
+            } else if (attacker.type === 'sniper') {
+                arrow.style.backgroundColor = '#AF4C4C';
+            } else if (attacker.type === 'tank') {
+                arrow.style.backgroundColor = '#AF914C';
+                arrow.style.height = '4px'; // Thicker projectile for tank
+            }
+            
+            // Calculate angle and distance
+            const angle = Math.atan2(endY - startY, endX - startX) * 180 / Math.PI;
+            const distance = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+            
+            arrow.style.width = distance + 'px';
+            arrow.style.transform = `rotate(${angle}deg)`;
+            
+            gameBoard.appendChild(arrow);
+            
+            // Speed varies by unit type
+            let duration = 200;
+            if (attacker.type === 'sniper') {
+                duration = 100; // Faster projectile
+            } else if (attacker.type === 'tank') {
+                duration = 300; // Slower projectile
+            }
+            
+            // Remove after animation
+            setTimeout(() => {
+                if (gameBoard.contains(arrow)) {
+                    gameBoard.removeChild(arrow);
+                }
+            }, duration);
+        }
+        
+        function createHitEffect(gridX, gridY) {
+            // If game is over, don't create more effects
+            if (gameOver) return;
+            
+            const x = (gridX + 0.5) * TILE_SIZE;
+            const y = (gridY + 0.5) * TILE_SIZE;
+            
+            const hit = document.createElement('div');
+            hit.className = 'special-effect';
+            hit.style.left = x + 'px';
+            hit.style.top = y + 'px';
+            hit.style.width = '10px';
+            hit.style.height = '10px';
+            hit.style.backgroundColor = '#ff0000';
+            hit.style.borderRadius = '50%';
+            hit.style.transform = 'translate(-50%, -50%)';
+            hit.style.animation = 'splash 0.3s forwards';
+            
+            gameBoard.appendChild(hit);
+            
+            // Remove after animation
+            setTimeout(() => {
+                if (gameBoard.contains(hit)) {
+                    gameBoard.removeChild(hit);
+                }
+            }, 300);
+        }
+        
+        function createSplashEffect(x, y) {
+            // If game is over, don't create more effects
+            if (gameOver) return;
+            
+            const explosion = document.createElement('div');
+            explosion.className = 'cannon-explosion';
+            explosion.style.left = ((x + 0.5) * TILE_SIZE) + 'px';
+            explosion.style.top = ((y + 0.5) * TILE_SIZE) + 'px';
+            explosion.style.width = TILE_SIZE + 'px';
+            explosion.style.height = TILE_SIZE + 'px';
+            
+            gameBoard.appendChild(explosion);
+            
+            // Remove after animation
+            setTimeout(() => {
+                if (gameBoard.contains(explosion)) {
+                    gameBoard.removeChild(explosion);
+                }
+            }, 800);
+        }
+        
+        function createBlockEffect(unit) {
+            const shield = unit.element.querySelector('.shield');
+            if (shield) {
+                // Enhance shield effect temporarily
+                shield.style.border = '3px solid #4a90e2';
+                shield.style.animation = 'shield-pulse 0.5s';
+                
+                setTimeout(() => {
+                    shield.style.border = '2px solid #4a90e2';
+                    shield.style.animation = 'shield-pulse 1s infinite';
+                }, 500);
+            } else {
+                // If there's no permanent shield (for enemy units), create temporary one
+                const x = (unit.gridX + 0.5) * TILE_SIZE;
+                const y = (unit.gridY + 0.5) * TILE_SIZE;
+                
+                const tempShield = document.createElement('div');
+                tempShield.className = 'shield special-effect';
+                tempShield.style.left = x + 'px';
+                tempShield.style.top = y + 'px';
+                
+                gameBoard.appendChild(tempShield);
+                
+                // Remove after animation
+                setTimeout(() => {
+                    if (gameBoard.contains(tempShield)) {
+                        gameBoard.removeChild(tempShield);
+                    }
+                }, 1000);
+            }
+        }
+        
+        function updateEffects() {
+            // Clean up expired effects
+            for (let i = effects.length - 1; i >= 0; i--) {
+                const effect = effects[i];
+                effect.lifetime -= 1;
+                
+                if (effect.lifetime <= 0) {
+                    gameBoard.removeChild(effect.element);
+                    effects.splice(i, 1);
+                }
+            }
+        }
+        
+        function updateEnemyAI() {
+            // If game is over, don't update
+            if (gameOver) return;
+            
+            // Enemy builds buildings periodically but is limited by gold now
+            if (enemyBuildings.length < (isEnemyUnderPressure() ? 7 : 5)) { // Allow more buildings when under pressure
+                // Choose a building type based on current situation
+                let type;
+                const playerUnitCount = playerUnits.length;
+                
+                // Smarter AI decisions
+                if (playerUnitCount > 10 && enemyGold >= BUILDING_COSTS['factory']) {
+                    // If player has many units, focus on tanks
+                    type = 'factory';
+                } else if (playerBuildings.filter(b => b.type === 'archery').length > 2 && enemyGold >= BUILDING_COSTS['barracks']) {
+                    // If player has many snipers, counter with infantry
+                    type = 'barracks';
+                } else {
+                    // Otherwise, pick the most expensive option the enemy can afford
+                    if (enemyGold >= BUILDING_COSTS['factory']) {
+                        type = 'factory';
+                    } else if (enemyGold >= BUILDING_COSTS['archery']) {
+                        type = 'archery';
+                    } else if (enemyGold >= BUILDING_COSTS['barracks']) {
+                        type = 'barracks';
+                    } else {
+                        return; // Enemy can't afford any buildings
+                    }
+                }
+                
+                // Proceed only if we can afford the selected building
+                if (enemyGold >= BUILDING_COSTS[type]) {
+                    // Subtract cost from enemy gold
+                    enemyGold -= BUILDING_COSTS[type];
+                    
+                    // Choose a position
+                    const gridX = ENEMY_BASE_X - 1;
+                    let gridY;
+                    
+                    // Try to place buildings across from player buildings if possible
+                    let placed = false;
+                    for (let playerBuilding of playerBuildings) {
+                        gridY = playerBuilding.gridY;
+                        
+                        // Check if valid position
+                        let validPosition = true;
+                        for (let building of enemyBuildings) {
+                            if (building.gridX === gridX && building.gridY === gridY) {
+                                validPosition = false;
+                                break;
+                            }
+                        }
+                        
+                        if (validPosition) {
+                            placed = true;
+                            break;
+                        }
+                    }
+                    
+                    // If couldn't place across from player buildings, use random position
+                    if (!placed) {
+                        gridY = Math.floor(Math.random() * GRID_HEIGHT);
+                        
+                        // Check if valid position
+                        let validPosition = true;
+                        for (let building of enemyBuildings) {
+                            if (building.gridX === gridX && building.gridY === gridY) {
+                                validPosition = false;
+                                break;
+                            }
+                        }
+                        
+                        if (!validPosition) {
+                            return; // Skip this round if no valid position
+                        }
+                    }
+                    
+                    const building = {
+                        gridX: gridX,
+                        gridY: gridY,
+                        type: type,
+                        health: 150,
+                        maxHealth: 150,
+                        element: null,
+                        attackTimer: 0,
+                        target: null
+                    };
+                    
+                    // Add attack properties based on building type
+                    const stats = BUILDING_STATS[type];
+                    if (stats && stats.canAttack) {
+                        building.canAttack = true;
+                        building.damage = stats.damage;
+                        building.attackSpeed = stats.attackSpeed;
+                        building.range = stats.range;
+                        building.projectileColor = stats.projectileColor;
+                    }
+                    
+                    // Create element only if in explored area
+                    if (isTileExplored(gridX, gridY)) {
+                        // Create building element
+                        const buildingElement = document.createElement('div');
+                        buildingElement.className = `building ${type}`;
+                        buildingElement.style.left = ((building.gridX + 0.5) * TILE_SIZE) + 'px';
+                        buildingElement.style.top = ((building.gridY + 0.5) * TILE_SIZE) + 'px';
+                        
+                        // Add cooldown indicator
+                        const cooldownIndicator = document.createElement('div');
+                        cooldownIndicator.className = 'cooldown';
+                        cooldownIndicator.style.width = '4px';
+                        cooldownIndicator.style.height = '20px';
+                        cooldownIndicator.style.backgroundColor = 'white';
+                        cooldownIndicator.style.position = 'absolute';
+                        cooldownIndicator.style.left = '50%';
+                        cooldownIndicator.style.top = '50%';
+                        cooldownIndicator.style.transform = 'translate(-50%, -50%)';
+                        
+                        // Add health bar
+                        const healthBar = document.createElement('div');
+                        healthBar.className = 'health-bar';
+                        healthBar.style.width = '30px';
+                        
+                        const healthFill = document.createElement('div');
+                        healthFill.className = 'health-fill';
+                        healthFill.style.width = '100%';
+                        
+                        healthBar.appendChild(healthFill);
+                        buildingElement.appendChild(healthBar);
+                        buildingElement.appendChild(cooldownIndicator);
+                        gameBoard.appendChild(buildingElement);
+                        
+                        building.element = buildingElement;
+                    }
+                    
+                    enemyBuildings.push(building);
+                }
+            }
+        }
+        
+        function updateExploredTiles() {
+            // Reveal tiles around player buildings
+            for (let building of playerBuildings) {
+                revealTilesAround(building.gridX, building.gridY, 2);
+            }
+            
+            // Reveal tiles around player units
+            for (let unit of playerUnits) {
+                revealTilesAround(unit.gridX, unit.gridY, 3);
+            }
+            
+            // Show enemy base if explored
+            if (isTileExplored(enemyBase.gridX, enemyBase.gridY)) {
+                document.getElementById('enemyBaseElement').style.visibility = 'visible';
+            }
+            
+            // Show enemy buildings if explored
+            for (let building of enemyBuildings) {
+                if (isTileExplored(building.gridX, building.gridY)) {
+                    if (!building.element) {
+                        // Create building element if it doesn't exist yet
+                        const buildingElement = document.createElement('div');
+                        buildingElement.className = `building ${building.type}`;
+                        buildingElement.style.left = ((building.gridX + 0.5) * TILE_SIZE) + 'px';
+                        buildingElement.style.top = ((building.gridY + 0.5) * TILE_SIZE) + 'px';
+                        
+                        // Add cooldown indicator
+                        const cooldownIndicator = document.createElement('div');
+                        cooldownIndicator.className = 'cooldown';
+                        cooldownIndicator.style.width = '4px';
+                        cooldownIndicator.style.height = '20px';
+                        cooldownIndicator.style.backgroundColor = 'white';
+                        cooldownIndicator.style.position = 'absolute';
+                        cooldownIndicator.style.left = '50%';
+                        cooldownIndicator.style.top = '50%';
+                        cooldownIndicator.style.transform = 'translate(-50%, -50%)';
+                        
+                        buildingElement.appendChild(cooldownIndicator);
+                        gameBoard.appendChild(buildingElement);
+                        
+                        building.element = buildingElement;
+                    } else {
+                        building.element.style.visibility = 'visible';
+                    }
+                }
+            }
+        }
+        
+        function revealTilesAround(gridX, gridY, radius) {
+            for (let x = gridX - radius; x <= gridX + radius; x++) {
+                for (let y = gridY - radius; y <= gridY + radius; y++) {
+                    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
+                        exploredTiles[`${x},${y}`] = true;
+                        
+                        // Update tile appearance
+                        const tile = document.getElementById(`tile-${x}-${y}`);
+                        if (tile) {
+                            tile.classList.remove('unexplored');
+                            
+                            if (x < BATTLE_LINE - 3) {
+                                tile.classList.add('player-territory');
+                            } else if (x > BATTLE_LINE + 3) {
+                                tile.classList.add('enemy-territory');
+                            } else {
+                                tile.classList.add('neutral-territory');
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        function isTileExplored(gridX, gridY) {
+            return exploredTiles[`${gridX},${gridY}`] === true;
+        }
+        
+        function distance(x1, y1, x2, y2) {
+            return Math.abs(x1 - x2) + Math.abs(y1 - y2); // Manhattan distance
+        }
+        
+        function updateUI() {
+            document.getElementById('goldDisplay').textContent = Math.floor(playerGold);
+            document.getElementById('playerBaseHealth').textContent = playerBase.health;
+            document.getElementById('enemyBaseHealth').textContent = 
+                isTileExplored(enemyBase.gridX, enemyBase.gridY) ? enemyBase.health : '???';
+            
+            // Update base health bars
+            const playerHealthFill = document.querySelector('#playerBaseElement .health-fill');
+            playerHealthFill.style.width = (playerBase.health / playerBase.maxHealth * 100) + '%';
+            
+            const enemyHealthFill = document.querySelector('#enemyBaseElement .health-fill');
+            enemyHealthFill.style.width = (enemyBase.health / enemyBase.maxHealth * 100) + '%';
+        }
+        
+        // Constants for easy reference
+        const PLAYER_BASE_X = 1;
+        const ENEMY_BASE_X = GRID_WIDTH - 2;
+        
+        // Base cannon functions
+        function updateBaseCannons(deltaTime) {
+            // If game is over, don't update
+            if (gameOver) return;
+            
+            // Update player base cannon
+            updateBaseCannon(playerBase, 'playerCannon', deltaTime, enemyUnits);
+            
+            // Update enemy base cannon if visible
+            if (isTileExplored(enemyBase.gridX, enemyBase.gridY)) {
+                updateBaseCannon(enemyBase, 'enemyCannon', deltaTime, playerUnits);
+            }
+        }
+        
+        function updateBaseCannon(base, cannonId, deltaTime, targetUnits) {
+            const cannon = document.getElementById(cannonId);
+            if (!cannon) return;
+            
+            // Update cooldown
+            if (base.cannon.cooldown > 0) {
+                base.cannon.cooldown -= deltaTime;
+                
+                // Update reload progress bar
+                const reloadFill = cannon.querySelector('.cannon-reload-fill');
+                if (reloadFill) {
+                    const progress = 100 * (1 - base.cannon.cooldown / base.cannon.maxCooldown);
+                    reloadFill.style.width = progress + '%';
+                }
+                
+                if (base.cannon.cooldown <= 0) {
+                    base.cannon.ready = true;
+                    cannon.classList.add('cannon-ready');
+                }
+            }
+            
+            // If cannon is ready, look for targets
+            if (base.cannon.ready) {
+                let closestTarget = null;
+                let closestDistance = base.cannon.range + 1;
+                
+                for (let unit of targetUnits) {
+                    const dist = distance(base.gridX, base.gridY, unit.gridX, unit.gridY);
+                    if (dist <= base.cannon.range && dist < closestDistance) {
+                        closestTarget = unit;
+                        closestDistance = dist;
+                    }
+                }
+                
+                // If found a target, fire cannon
+                if (closestTarget) {
+                    fireCannon(base, cannon, closestTarget);
+                }
+            }
+        }
+        
+        function fireCannon(base, cannonElement, target) {
+            // If game is over or target no longer exists, don't fire
+            if (gameOver || !target || !target.element || !gameBoard.contains(target.element)) {
+                return;
+            }
+            
+            // Set cannon to cooldown
+            base.cannon.ready = false;
+            base.cannon.cooldown = base.cannon.maxCooldown;
+            cannonElement.classList.remove('cannon-ready');
+            
+            // Reset reload bar
+            const reloadFill = cannonElement.querySelector('.cannon-reload-fill');
+            if (reloadFill) {
+                reloadFill.style.width = '0%';
+            }
+            
+            // Calculate angles for cannon and trajectory
+            const startX = (base.gridX + 0.5) * TILE_SIZE;
+            const startY = (base.gridY + 0.5) * TILE_SIZE;
+            const targetX = (target.gridX + 0.5) * TILE_SIZE;
+            const targetY = (target.gridY + 0.5) * TILE_SIZE;
+            
+            const angle = Math.atan2(targetY - startY, targetX - startX) * 180 / Math.PI;
+            
+            // Rotate cannon to face target
+            if (base === playerBase) {
+                cannonElement.style.transform = `translateY(-50%) rotate(${angle}deg)`;
+            } else {
+                // For enemy, we need to adjust the rotation since cannon points left
+                cannonElement.style.transform = `translateY(-50%) rotate(${angle}deg)`;
+            }
+            
+            // Create projectile
+            const projectile = document.createElement('div');
+            projectile.className = 'cannon-projectile';
+            projectile.style.left = startX + 'px';
+            projectile.style.top = startY + 'px';
+            gameBoard.appendChild(projectile);
+            
+            // Animate projectile
+            const duration = 500; // ms
+            const startTime = Date.now();
+            
+            function animateProjectile() {
+                if (gameOver) {
+                    // If game ended during animation, clean up the projectile
+                    if (gameBoard.contains(projectile)) {
+                        gameBoard.removeChild(projectile);
+                    }
+                    return;
+                }
+                
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                
+                const currentX = startX + (targetX - startX) * progress;
+                const currentY = startY + (targetY - startY) * progress;
+                
+                projectile.style.left = currentX + 'px';
+                projectile.style.top = currentY + 'px';
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animateProjectile);
+                } else {
+                    // Projectile hit target
+                    if (gameBoard.contains(projectile)) {
+                        gameBoard.removeChild(projectile);
+                    }
+                    
+                    // Create explosion effect
+                    createCannonExplosion(targetX, targetY);
+                    
+                    // Only deal damage if the game isn't over and the target still exists
+                    if (!gameOver && target.health > 0) {
+                        dealCannonDamage(base, target);
+                    }
+                }
+            }
+            
+            requestAnimationFrame(animateProjectile);
+        }
+        
+        function createCannonExplosion(x, y) {
+            const explosion = document.createElement('div');
+            explosion.className = 'cannon-explosion';
+            explosion.style.left = x + 'px';
+            explosion.style.top = y + 'px';
+            explosion.style.width = TILE_SIZE + 'px';
+            explosion.style.height = TILE_SIZE + 'px';
+            
+            gameBoard.appendChild(explosion);
+            
+            // Remove after animation
+            setTimeout(() => {
+                if (gameBoard.contains(explosion)) {
+                    gameBoard.removeChild(explosion);
+                }
+            }, 800);
+        }
+        
+        function dealCannonDamage(attackingBase, targetUnit) {
+            const targetUnits = attackingBase === playerBase ? enemyUnits : playerUnits;
+            
+            // Deal damage to primary target
+            targetUnit.health -= attackingBase.cannon.damage;
+            
+            // Update health bar
+            const healthFill = targetUnit.element.querySelector('.health-fill');
+            const healthPercent = Math.max(0, targetUnit.health / targetUnit.maxHealth * 100);
+            healthFill.style.width = healthPercent + '%';
+            
+            // Check if target died
+            if (targetUnit.health <= 0) {
+                gameBoard.removeChild(targetUnit.element);
+                targetUnits.splice(targetUnits.indexOf(targetUnit), 1);
+            }
+            
+            // Deal splash damage to nearby units
+            for (let unit of targetUnits) {
+                if (unit !== targetUnit && 
+                    distance(targetUnit.gridX, targetUnit.gridY, unit.gridX, unit.gridY) <= attackingBase.cannon.areaOfEffect) {
+                    
+                    // Deal half damage to nearby units
+                    unit.health -= Math.floor(attackingBase.cannon.damage / 2);
+                    
+                    // Update health bar
+                    const healthFill = unit.element.querySelector('.health-fill');
+                    const healthPercent = Math.max(0, unit.health / unit.maxHealth * 100);
+                    healthFill.style.width = healthPercent + '%';
+                    
+                    // Check if unit died
+                    if (unit.health <= 0) {
+                        gameBoard.removeChild(unit.element);
+                        targetUnits.splice(targetUnits.indexOf(unit), 1);
+                    }
+                }
+            }
+        }
+        
+        // Start game when page loads
+        window.onload = initGame;
+    </script>
+</body>
+</html>
